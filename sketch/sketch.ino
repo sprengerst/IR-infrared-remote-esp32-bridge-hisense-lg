@@ -9,6 +9,9 @@ decode_results results;
 
 IRsend irsend(13);  // KY-005 on GPIO 13
 
+// Repeat count for IR send
+const uint8_t SEND_REPEAT_COUNT = 1;
+
 // RGB LED Pins + PWM
 const uint8_t PIN_R = 26, PIN_G = 27, PIN_B = 25;
 const uint8_t CH_R = 0, CH_G = 1, CH_B = 2;
@@ -46,10 +49,10 @@ const uint8_t PWM_RES = 8;
 #define VOLM_B 0
 
 #define MUTE_R 255
-#define MUTE_G 255
-#define MUTE_B 0
+#define MUTE_G 0
+#define MUTE_B 128
 
-enum FadeState { IDLE, FADE_UP, HOLD, FADE_DOWN, TO_STANDBY };
+enum FadeState { IDLE, HOLD, FADE_DOWN, TO_STANDBY };
 FadeState fadeState = IDLE;
 
 uint8_t targetR = STBY_R, targetG = STBY_G, targetB = STBY_B;
@@ -60,6 +63,7 @@ const uint16_t fadeStepTime = 1;
 const uint16_t fadeHoldTime = 400;
 
 uint32_t lastCode = 0;
+bool keyHeld = false;
 
 void setupPWM() {
   ledcSetup(CH_R, PWM_FREQ, PWM_RES); ledcAttachPin(PIN_R, CH_R);
@@ -70,25 +74,24 @@ void setupPWM() {
   ledcWrite(CH_B, STBY_B);
 }
 
-void setColor(uint8_t r, uint8_t g, uint8_t b, FadeState nextState = FADE_UP) {
+void setColor(uint8_t r, uint8_t g, uint8_t b) {
   targetR = r;
   targetG = g;
   targetB = b;
-  valueR = 0;
-  valueG = 0;
-  valueB = 0;
-  fadeTimer = millis();
-  fadeState = nextState;
+  valueR = r;
+  valueG = g;
+  valueB = b;
+  ledcWrite(CH_R, r);
+  ledcWrite(CH_G, g);
+  ledcWrite(CH_B, b);
+  fadeState = HOLD;
 }
 
 void returnToStandby() {
   targetR = STBY_R;
   targetG = STBY_G;
   targetB = STBY_B;
-  valueR = 0;
-  valueG = 0;
-  valueB = 0;
-  fadeState = TO_STANDBY;
+  fadeState = FADE_DOWN;
   fadeTimer = millis();
 }
 
@@ -111,21 +114,8 @@ void processFade() {
   lastStepTime = now;
 
   switch (fadeState) {
-    case FADE_UP:
-      updateChannel(CH_R, valueR, targetR);
-      updateChannel(CH_G, valueG, targetG);
-      updateChannel(CH_B, valueB, targetB);
-      if (channelsCloseEnough(valueR, targetR, valueG, targetG, valueB, targetB)) {
-        fadeState = HOLD;
-        fadeTimer = now;
-      }
-      break;
-
     case HOLD:
-      if (now - fadeTimer >= fadeHoldTime) {
-        fadeState = FADE_DOWN;
-        fadeTimer = now;
-      }
+      // do nothing while held
       break;
 
     case FADE_DOWN:
@@ -133,7 +123,7 @@ void processFade() {
       updateChannel(CH_G, valueG, 0);
       updateChannel(CH_B, valueB, 0);
       if (channelsCloseEnough(valueR, 0, valueG, 0, valueB, 0)) {
-        returnToStandby();
+        fadeState = TO_STANDBY;
       }
       break;
 
@@ -153,22 +143,19 @@ void processFade() {
 
 void sendLG(uint32_t code) {
   if (code == HISENSE_PWR) {
-    irsend.sendSAMSUNG(LG_PWR, 32, 3);
-    Serial.println("→ Sent LG Power");
+    irsend.sendSAMSUNG(LG_PWR, 32, SEND_REPEAT_COUNT);
   } else if (code == HISENSE_VOLP) {
-    irsend.sendSAMSUNG(LG_VOLP, 32, 3);
-    Serial.println("→ Sent LG Volume+");
+    irsend.sendSAMSUNG(LG_VOLP, 32, SEND_REPEAT_COUNT);
   } else if (code == HISENSE_VOLM) {
-    irsend.sendSAMSUNG(LG_VOLM, 32, 3);
-    Serial.println("→ Sent LG Volume–");
+    irsend.sendSAMSUNG(LG_VOLM, 32, SEND_REPEAT_COUNT);
   } else if (code == HISENSE_MUTE) {
-    irsend.sendSAMSUNG(LG_MUTE, 32, 3);
-    Serial.println("→ Sent LG Mute");
+    irsend.sendSAMSUNG(LG_MUTE, 32, SEND_REPEAT_COUNT);
   }
 }
 
 void handleCode(uint32_t code) {
   lastCode = code;
+  keyHeld = true;
   uint8_t r = 0, g = 0, b = 0;
 
   if (code == HISENSE_PWR) {
@@ -183,7 +170,7 @@ void handleCode(uint32_t code) {
     return;
   }
 
-  setColor(r, g, b, FADE_UP);
+  setColor(r, g, b);
   sendLG(code);
 }
 
@@ -192,14 +179,17 @@ void setup() {
   irsend.begin();
   irrecv.enableIRIn();
   setupPWM();
-  Serial.println("Ready — bridging Hisense to LG with fade + mute");
+  Serial.println("Ready — holding keeps LED on, fade starts after release");
 
   delay(2000);
-  setColor(PWR_R, PWR_G, PWR_B, FADE_UP);
+  setColor(PWR_R, PWR_G, PWR_B);
   sendLG(HISENSE_PWR);
 }
 
 void loop() {
+  static unsigned long lastPressTime = 0;
+  const uint16_t holdTimeout = 500;
+
   processFade();
 
   if (irrecv.decode(&results)) {
@@ -211,5 +201,13 @@ void loop() {
     } else {
       handleCode(code);
     }
+
+    lastPressTime = millis();
+  }
+
+  // Check if hold timed out
+  if (keyHeld && millis() - lastPressTime > holdTimeout) {
+    keyHeld = false;
+    returnToStandby();
   }
 }
