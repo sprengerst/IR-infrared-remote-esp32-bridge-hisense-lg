@@ -52,7 +52,7 @@ const uint8_t PWM_RES = 8;
 #define MUTE_G 0
 #define MUTE_B 128
 
-enum FadeState { IDLE, HOLD, FADE_DOWN, TO_STANDBY };
+enum FadeState { IDLE, FADE_UP, HOLD, FADE_DOWN, TO_STANDBY };
 FadeState fadeState = IDLE;
 
 uint8_t targetR = STBY_R, targetG = STBY_G, targetB = STBY_B;
@@ -74,24 +74,25 @@ void setupPWM() {
   ledcWrite(CH_B, STBY_B);
 }
 
-void setColor(uint8_t r, uint8_t g, uint8_t b) {
+void setColor(uint8_t r, uint8_t g, uint8_t b, FadeState nextState = FADE_UP) {
   targetR = r;
   targetG = g;
   targetB = b;
-  valueR = r;
-  valueG = g;
-  valueB = b;
-  ledcWrite(CH_R, r);
-  ledcWrite(CH_G, g);
-  ledcWrite(CH_B, b);
-  fadeState = HOLD;
+  valueR = 0;
+  valueG = 0;
+  valueB = 0;
+  fadeTimer = millis();
+  fadeState = nextState;
 }
 
 void returnToStandby() {
   targetR = STBY_R;
   targetG = STBY_G;
   targetB = STBY_B;
-  fadeState = FADE_DOWN;
+  valueR = 0;
+  valueG = 0;
+  valueB = 0;
+  fadeState = TO_STANDBY;
   fadeTimer = millis();
 }
 
@@ -114,8 +115,18 @@ void processFade() {
   lastStepTime = now;
 
   switch (fadeState) {
+    case FADE_UP:
+      updateChannel(CH_R, valueR, targetR);
+      updateChannel(CH_G, valueG, targetG);
+      updateChannel(CH_B, valueB, targetB);
+      if (channelsCloseEnough(valueR, targetR, valueG, targetG, valueB, targetB)) {
+        fadeState = HOLD;
+        fadeTimer = now;
+      }
+      break;
+
     case HOLD:
-      // do nothing while held
+      // Do nothing — light stays on
       break;
 
     case FADE_DOWN:
@@ -123,7 +134,7 @@ void processFade() {
       updateChannel(CH_G, valueG, 0);
       updateChannel(CH_B, valueB, 0);
       if (channelsCloseEnough(valueR, 0, valueG, 0, valueB, 0)) {
-        fadeState = TO_STANDBY;
+        returnToStandby();
       }
       break;
 
@@ -170,7 +181,8 @@ void handleCode(uint32_t code) {
     return;
   }
 
-  setColor(r, g, b);
+  fadeState = IDLE; // reset any previous fade
+  setColor(r, g, b, FADE_UP);
   sendLG(code);
 }
 
@@ -179,10 +191,10 @@ void setup() {
   irsend.begin();
   irrecv.enableIRIn();
   setupPWM();
-  Serial.println("Ready — holding keeps LED on, fade starts after release");
+  Serial.println("Ready — fade in on press, hold lit, fade out on release");
 
   delay(2000);
-  setColor(PWR_R, PWR_G, PWR_B);
+  setColor(PWR_R, PWR_G, PWR_B, FADE_UP);
   sendLG(HISENSE_PWR);
 }
 
@@ -197,7 +209,7 @@ void loop() {
     irrecv.resume();
 
     if (code == NEC_REPEAT) {
-      handleCode(lastCode);
+      handleCode(lastCode);  // repeat keeps it held
     } else {
       handleCode(code);
     }
@@ -205,9 +217,9 @@ void loop() {
     lastPressTime = millis();
   }
 
-  // Check if hold timed out
   if (keyHeld && millis() - lastPressTime > holdTimeout) {
     keyHeld = false;
-    returnToStandby();
+    fadeState = FADE_DOWN;
+    fadeTimer = millis();
   }
 }
