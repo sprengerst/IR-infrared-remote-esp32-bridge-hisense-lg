@@ -1,29 +1,34 @@
 #include <IRremoteESP8266.h>
 #include <IRrecv.h>
+#include <IRsend.h>
 #include <IRutils.h>
 
 const uint16_t RECV_PIN = 23;
 IRrecv irrecv(RECV_PIN);
 decode_results results;
 
-// RGB Pins + PWM Kanäle
+IRsend irsend(13);  // KY-005 on GPIO 13
+
+// RGB LED Pins + PWM
 const uint8_t PIN_R = 26, PIN_G = 27, PIN_B = 25;
 const uint8_t CH_R = 0, CH_G = 1, CH_B = 2;
 const uint16_t PWM_FREQ = 5000;
 const uint8_t PWM_RES = 8;
 
-// IR-Codes
-#define HISENSE_PWR  0x00FDB04F
-#define HISENSE_VOLP 0x00FD22DD
-#define HISENSE_VOLM 0x00FDC23D
-#define NEC_REPEAT   0xFFFFFFFF
+// Hisense IR Codes
+#define HISENSE_PWR   0x00FDB04F
+#define HISENSE_VOLP  0x00FD22DD
+#define HISENSE_VOLM  0x00FDC23D
+#define HISENSE_MUTE  0xFD708F
+#define NEC_REPEAT    0xFFFFFFFF
 
-// LG-Zielcodes
+// LG IR Codes (Samsung protocol, 32-bit)
 #define LG_PWR   0x34347887
 #define LG_VOLP  0x3434E817
 #define LG_VOLM  0x34346897
+#define LG_MUTE  0x3434F807
 
-// Farben
+// Colors
 #define STBY_R 0
 #define STBY_G 0
 #define STBY_B 6
@@ -39,6 +44,10 @@ const uint8_t PWM_RES = 8;
 #define VOLM_R 0
 #define VOLM_G 255
 #define VOLM_B 0
+
+#define MUTE_R 255
+#define MUTE_G 255
+#define MUTE_B 0
 
 enum FadeState { IDLE, FADE_UP, HOLD, FADE_DOWN, TO_STANDBY };
 FadeState fadeState = IDLE;
@@ -56,9 +65,9 @@ void setupPWM() {
   ledcSetup(CH_R, PWM_FREQ, PWM_RES); ledcAttachPin(PIN_R, CH_R);
   ledcSetup(CH_G, PWM_FREQ, PWM_RES); ledcAttachPin(PIN_G, CH_G);
   ledcSetup(CH_B, PWM_FREQ, PWM_RES); ledcAttachPin(PIN_B, CH_B);
-  ledcWrite(CH_R, valueR);
-  ledcWrite(CH_G, valueG);
-  ledcWrite(CH_B, valueB);
+  ledcWrite(CH_R, STBY_R);
+  ledcWrite(CH_G, STBY_G);
+  ledcWrite(CH_B, STBY_B);
 }
 
 void setColor(uint8_t r, uint8_t g, uint8_t b, FadeState nextState = FADE_UP) {
@@ -142,39 +151,52 @@ void processFade() {
   }
 }
 
-void logBridgedSend(uint32_t code) {
+void sendLG(uint32_t code) {
   if (code == HISENSE_PWR) {
-    Serial.println("→ Sende LG-Code: 0x34347887 (Power)");
+    irsend.sendSAMSUNG(LG_PWR, 32, 3);
+    Serial.println("→ Sent LG Power");
   } else if (code == HISENSE_VOLP) {
-    Serial.println("→ Sende LG-Code: 0x3434E817 (Volume+)");
+    irsend.sendSAMSUNG(LG_VOLP, 32, 3);
+    Serial.println("→ Sent LG Volume+");
   } else if (code == HISENSE_VOLM) {
-    Serial.println("→ Sende LG-Code: 0x34346897 (Volume–)");
+    irsend.sendSAMSUNG(LG_VOLM, 32, 3);
+    Serial.println("→ Sent LG Volume–");
+  } else if (code == HISENSE_MUTE) {
+    irsend.sendSAMSUNG(LG_MUTE, 32, 3);
+    Serial.println("→ Sent LG Mute");
   }
 }
 
 void handleCode(uint32_t code) {
   lastCode = code;
+  uint8_t r = 0, g = 0, b = 0;
 
-  uint8_t r, g, b;
   if (code == HISENSE_PWR) {
     r = PWR_R; g = PWR_G; b = PWR_B;
   } else if (code == HISENSE_VOLP) {
     r = VOLP_R; g = VOLP_G; b = VOLP_B;
   } else if (code == HISENSE_VOLM) {
     r = VOLM_R; g = VOLM_G; b = VOLM_B;
+  } else if (code == HISENSE_MUTE) {
+    r = MUTE_R; g = MUTE_G; b = MUTE_B;
   } else {
     return;
   }
 
-  logBridgedSend(code); // <-- Logging der Brücke
   setColor(r, g, b, FADE_UP);
+  sendLG(code);
 }
 
 void setup() {
   Serial.begin(115200);
+  irsend.begin();
   irrecv.enableIRIn();
   setupPWM();
-  Serial.println("Ready — Hisense to LG bridge logging active");
+  Serial.println("Ready — bridging Hisense to LG with fade + mute");
+
+  delay(2000);
+  setColor(PWR_R, PWR_G, PWR_B, FADE_UP);
+  sendLG(HISENSE_PWR);
 }
 
 void loop() {
