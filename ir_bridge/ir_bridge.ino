@@ -10,7 +10,7 @@ decode_results results;
 IRsend irsend(13);  // KY-005 on GPIO 13
 
 // Repeat count for IR send
-const uint8_t SEND_REPEAT_COUNT = 1;
+const uint8_t SEND_REPEAT_COUNT = 2;
 
 // RGB LED Pins + PWM
 const uint8_t PIN_R = 26, PIN_G = 27, PIN_B = 25;

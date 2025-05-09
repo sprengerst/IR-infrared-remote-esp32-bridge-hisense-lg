@@ -36,8 +36,9 @@ The goal is to control the soundbar using the TV remote only – seamlessly and 
 
 ```
 .
-├── sketch/
-│   ├── sketch.ino        ← main bridge code
+├── ir_bridge/
+│   ├── ir_bridge.ino        ← main bridge code
+├── receiver_test/
 │   └── receiver_test.ino ← debug tool to identify IR codes
 └── README.md             ← this documentation
 ```
